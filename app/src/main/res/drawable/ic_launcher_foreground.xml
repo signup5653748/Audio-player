@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Equalizer bars / audio wave -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M26,46h6v16h-6z M36,36h6v36h-6z M46,28h6v52h-6z M56,38h6v32h-6z M66,32h6v44h-6z M76,44h6v20h-6z" />
+    <!-- Glowing play symbol circle in center-right -->
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M54,54m-22,0a22,22 0,1 1,44 0a22,22 0,1 1,-44 0"
+        android:fillAlpha="0.25"/>
+    <path
+        android:fillColor="#F43F5E"
+        android:pathData="M50,42 L64,54 L50,66 Z" />
+</vector>

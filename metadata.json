@@ -1,0 +1,6 @@
+{
+  "name": "Smart Music Player",
+  "description": "Advanced local music player with focused Player Mode, universal fade audio transitions, folder blacklist, and TalkBack accessibility.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

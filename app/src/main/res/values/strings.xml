@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">Smart Music Player</string>
+    <string name="tab_all_songs">All Songs</string>
+    <string name="tab_folders">Folders</string>
+    <string name="title_folder_filter">Folder Selection &amp; Blacklist</string>
+    <string name="title_audio_filter">Filter Short Audio</string>
+    <string name="title_fade_settings">Fade Effects Settings</string>
+    <string name="title_equalizer">Equalizer</string>
+    <string name="title_song_details">Song Details</string>
+    <string name="filter_none">Show All Audio</string>
+    <string name="filter_15s">Hide &lt; 15s</string>
+    <string name="filter_30s">Hide &lt; 30s</string>
+    <string name="filter_60s">Hide &lt; 60s</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="next_track">Next Track</string>
+    <string name="previous_track">Previous Track</string>
+    <string name="keep_screen_awake_on">Keep Screen Awake is ON</string>
+    <string name="keep_screen_awake_off">Keep Screen Awake is OFF</string>
+    <string name="permission_rationale">Smart Music Player requires storage permission to scan audio files.</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="no_media_found">No audio tracks found</string>
+</resources>
