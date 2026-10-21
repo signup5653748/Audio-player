@@ -9,6 +9,7 @@ import android.content.SharedPreferences
  * - Short audio filter threshold
  * - Universal customizable fade duration (in seconds)
  * - Skip interval duration (in seconds, default 10s)
+ * - Visual effects master toggle and active effect selection (20 styles)
  * - Keep Screen Awake (WakeLock) setting
  * - Equalizer presets and levels
  */
@@ -23,6 +24,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_FADE_EFFECTS_ENABLED = "fade_effects_enabled"
         private const val KEY_FADE_DURATION_SECONDS = "fade_duration_seconds"
         private const val KEY_SKIP_DURATION_SECONDS = "skip_duration_seconds"
+        private const val KEY_VISUAL_EFFECTS_ENABLED = "visual_effects_enabled"
+        private const val KEY_SELECTED_VISUAL_EFFECT_ID = "selected_visual_effect_id"
         private const val KEY_EQ_PRESET = "eq_preset"
         private const val KEY_BASS_BOOST = "bass_boost"
         private const val KEY_VIRTUALIZER = "virtualizer"
@@ -30,6 +33,7 @@ class PreferencesManager(context: Context) {
         const val DEFAULT_MIN_AUDIO_DURATION = 30 // Default 30s to hide WhatsApp/ringtones
         const val DEFAULT_FADE_DURATION_SECONDS = 0.8f // Default 0.8s universal smooth fade
         const val DEFAULT_SKIP_DURATION_SECONDS = 10 // Default 10s skip interval
+        const val DEFAULT_VISUAL_EFFECT_ID = 0 // Crimson Neon Pulse
     }
 
     var excludedFolders: Set<String>
@@ -72,6 +76,14 @@ class PreferencesManager(context: Context) {
     var skipDurationSeconds: Int
         get() = prefs.getInt(KEY_SKIP_DURATION_SECONDS, DEFAULT_SKIP_DURATION_SECONDS)
         set(value) = prefs.edit().putInt(KEY_SKIP_DURATION_SECONDS, value.coerceIn(3, 60)).apply()
+
+    var visualEffectsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_VISUAL_EFFECTS_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_VISUAL_EFFECTS_ENABLED, value).apply()
+
+    var selectedVisualEffectId: Int
+        get() = prefs.getInt(KEY_SELECTED_VISUAL_EFFECT_ID, DEFAULT_VISUAL_EFFECT_ID)
+        set(value) = prefs.edit().putInt(KEY_SELECTED_VISUAL_EFFECT_ID, value.coerceIn(0, 19)).apply()
 
     var equalizerPreset: Int
         get() = prefs.getInt(KEY_EQ_PRESET, 0) // 0 = Flat

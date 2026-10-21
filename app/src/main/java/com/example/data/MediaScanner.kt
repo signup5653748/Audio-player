@@ -203,11 +203,11 @@ class MediaScanner(private val context: Context) {
         val samples = mutableListOf<MediaItem>()
         val baseCacheDir = context.cacheDir
 
-        // 1. WhatsApp Voice Notes (Short: 8s, 12s)
+        // 1. WhatsApp Voice Notes (Short: 8s, 14s)
         val whatsappFolder = File(baseCacheDir, "WhatsApp Audio").apply { mkdirs() }
         samples.add(
             createWavSample(
-                file = File(whatsappFolder, "PTT-20261020-WA0001.opus"),
+                file = File(whatsappFolder, "Voice_Note_Sarah.wav"),
                 title = "Voice Note from Sarah",
                 artist = "WhatsApp Voice Note",
                 album = "WhatsApp Audio",
@@ -221,7 +221,7 @@ class MediaScanner(private val context: Context) {
         )
         samples.add(
             createWavSample(
-                file = File(whatsappFolder, "PTT-20261020-WA0002.opus"),
+                file = File(whatsappFolder, "Voice_Memo_Meeting.wav"),
                 title = "Voice Memo - Meeting Notes",
                 artist = "WhatsApp Voice Note",
                 album = "WhatsApp Audio",
@@ -238,7 +238,7 @@ class MediaScanner(private val context: Context) {
         val ringtonesFolder = File(baseCacheDir, "Ringtones").apply { mkdirs() }
         samples.add(
             createWavSample(
-                file = File(ringtonesFolder, "Chime_Alert.mp3"),
+                file = File(ringtonesFolder, "Cyber_Chime_Alert.wav"),
                 title = "Cyber Chime Ringtone",
                 artist = "System Audio",
                 album = "Ringtones",
@@ -255,7 +255,7 @@ class MediaScanner(private val context: Context) {
         val musicFolder = File(baseCacheDir, "Music").apply { mkdirs() }
         samples.add(
             createWavSample(
-                file = File(musicFolder, "Neon_Horizon.mp3"),
+                file = File(musicFolder, "Neon_Horizon.wav"),
                 title = "Neon Horizon (Synthwave)",
                 artist = "Aura Waves",
                 album = "Cyber Dreams 2026",
@@ -269,7 +269,7 @@ class MediaScanner(private val context: Context) {
         )
         samples.add(
             createWavSample(
-                file = File(musicFolder, "Midnight_Chill.mp3"),
+                file = File(musicFolder, "Midnight_Chill.wav"),
                 title = "Midnight Chill & Beats",
                 artist = "Lo-Fi Odyssey",
                 album = "Deep Focus Sessions",
@@ -283,7 +283,7 @@ class MediaScanner(private val context: Context) {
         )
         samples.add(
             createWavSample(
-                file = File(musicFolder, "Acoustic_Sunrise.mp3"),
+                file = File(musicFolder, "Acoustic_Sunrise.wav"),
                 title = "Acoustic Sunrise",
                 artist = "Elena Vance",
                 album = "Morning Glow",
@@ -300,7 +300,7 @@ class MediaScanner(private val context: Context) {
         val podcastFolder = File(baseCacheDir, "Podcasts").apply { mkdirs() }
         samples.add(
             createWavSample(
-                file = File(podcastFolder, "Episode_42_AI_Audio.mp3"),
+                file = File(podcastFolder, "Episode_42_Tech_Pulse.wav"),
                 title = "Tech Pulse Ep 42: Next-Gen Media",
                 artist = "Tech Daily",
                 album = "Tech Pulse Podcast",
@@ -313,11 +313,11 @@ class MediaScanner(private val context: Context) {
             )
         )
 
-        // 5. Video Clips folder (in "Movies" / "Camera") -> For audio-only background video test!
+        // 5. Video Clips folder (in "Movies") -> For audio-only background video test
         val moviesFolder = File(baseCacheDir, "Movies").apply { mkdirs() }
         samples.add(
             createWavSample(
-                file = File(moviesFolder, "Concert_Live_2026.mp4"),
+                file = File(moviesFolder, "Concert_Live_2026.wav"),
                 title = "Live Indie Concert Performance",
                 artist = "Electric Echoes (Live)",
                 album = "Summer Fest 2026",
@@ -331,7 +331,7 @@ class MediaScanner(private val context: Context) {
         )
         samples.add(
             createWavSample(
-                file = File(moviesFolder, "Documentary_Trailer.mp4"),
+                file = File(moviesFolder, "Documentary_Trailer.wav"),
                 title = "Nature Odyssey (Video in Audio Mode)",
                 artist = "Blue Planet Studios",
                 album = "Documentary Clips",
@@ -365,9 +365,10 @@ class MediaScanner(private val context: Context) {
     ): MediaItem {
         if (!file.exists() || file.length() == 0L) {
             try {
-                // Generate 3 seconds of looped PCM or duration seconds PCM wav
+                // Generate up to 30s of PCM wav audio with harmonic synthesis
                 val sampleRate = 22050
-                val numSamples = sampleRate * durationSeconds.coerceAtMost(10) // 10s of audio looping
+                val actualSeconds = durationSeconds.coerceIn(4, 30)
+                val numSamples = sampleRate * actualSeconds
                 val buffer = ByteArray(numSamples * 2)
 
                 for (i in 0 until numSamples) {

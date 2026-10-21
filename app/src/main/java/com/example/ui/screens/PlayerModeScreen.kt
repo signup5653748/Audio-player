@@ -1,14 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode as AnimRepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FastForward
@@ -35,7 +29,6 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
@@ -44,7 +37,6 @@ import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WbIncandescent
 import androidx.compose.material.icons.outlined.WbIncandescent
@@ -70,8 +62,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -82,9 +72,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.MediaItem
+import com.example.model.VisualEffectType
 import com.example.player.PlayerState
 import com.example.player.RepeatMode
-import kotlin.math.sin
+import com.example.ui.components.LiveVisualEffectCanvas
+import com.example.ui.components.StaticAlbumArtwork
 
 @Composable
 fun PlayerModeScreen(
@@ -93,6 +85,8 @@ fun PlayerModeScreen(
     fadeDurationSeconds: Float,
     skipDurationSeconds: Int,
     sleepTimerRemainingSeconds: Int?,
+    visualEffectsEnabled: Boolean,
+    selectedVisualEffect: VisualEffectType,
     onBackToHome: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
@@ -103,6 +97,7 @@ fun PlayerModeScreen(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onToggleKeepScreenAwake: () -> Unit,
+    onOpenVisualEffects: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenSongDetails: () -> Unit,
     onOpenFadeSettings: () -> Unit,
@@ -201,6 +196,15 @@ fun PlayerModeScreen(
                             onDismissRequest = { showMoreMenu = false }
                         ) {
                             DropdownMenuItem(
+                                text = { Text("Visual Effects & Animations") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onOpenVisualEffects()
+                                },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null) },
+                                modifier = Modifier.testTag("menu_visual_effects")
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Equalizer & Sound Effects") },
                                 onClick = {
                                     showMoreMenu = false
@@ -279,15 +283,33 @@ fun PlayerModeScreen(
         ) {
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Large Animated Visualizer / Cover Art Canvas
-            PlayerWaveformArtwork(
-                isPlaying = playerState.isPlaying,
+            // Central Artwork Canvas: Live Procedural Animation (when ON) or Static Album Artwork (when OFF)
+            Box(
                 modifier = Modifier
                     .size(240.dp)
                     .clip(RoundedCornerShape(26.dp))
-            )
+                    .clickable { onOpenVisualEffects() }
+                    .testTag("artwork_viewport")
+                    .semantics {
+                        contentDescription = if (visualEffectsEnabled) {
+                            "Live visual effect active: ${selectedVisualEffect.title}. Double tap to open visual effects gallery."
+                        } else {
+                            "Static album cover. Double tap to open visual effects gallery."
+                        }
+                    }
+            ) {
+                if (visualEffectsEnabled) {
+                    LiveVisualEffectCanvas(
+                        effect = selectedVisualEffect,
+                        isPlaying = playerState.isPlaying,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    StaticAlbumArtwork(modifier = Modifier.fillMaxSize())
+                }
+            }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // Song Title and Artist
             Column(
@@ -319,7 +341,7 @@ fun PlayerModeScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Indicator Badges: Folder tag, Fade effect status, Sleep timer badge
+            // Indicator Badges: Folder tag, Fade effect status, Visual Effect Pill, Sleep timer badge
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -346,6 +368,24 @@ fun PlayerModeScreen(
                         )
                     }
                 }
+
+                // Visual Effect Pill (Tap to open gallery directly!)
+                FilterChip(
+                    selected = visualEffectsEnabled,
+                    onClick = onOpenVisualEffects,
+                    label = {
+                        val text = if (visualEffectsEnabled) "FX: ${selectedVisualEffect.tag}" else "FX: OFF"
+                        Text(text, style = MaterialTheme.typography.labelSmall)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("player_fx_chip")
+                )
 
                 // Fade In / Out Active Indicator Badge
                 FilterChip(
@@ -596,12 +636,20 @@ fun PlayerModeScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Quick Shortcut Pills: Equalizer, Skip Duration, Sleep Timer
+            // Quick Shortcut Pills: Visual Effects, Equalizer, Skip Duration, Sleep Timer
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                FilterChip(
+                    selected = visualEffectsEnabled,
+                    onClick = onOpenVisualEffects,
+                    label = { Text("Effects (20)", style = MaterialTheme.typography.labelSmall) },
+                    leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                    modifier = Modifier.testTag("quick_fx_button")
+                )
+                Spacer(modifier = Modifier.width(6.dp))
                 FilterChip(
                     selected = false,
                     onClick = onOpenEqualizer,
@@ -609,23 +657,23 @@ fun PlayerModeScreen(
                     leadingIcon = { Icon(Icons.Default.Equalizer, contentDescription = null, modifier = Modifier.size(14.dp)) },
                     modifier = Modifier.testTag("quick_eq_button")
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 FilterChip(
                     selected = false,
                     onClick = onOpenSkipSettings,
-                    label = { Text("Skip: ${skipDurationSeconds}s", style = MaterialTheme.typography.labelSmall) },
+                    label = { Text("${skipDurationSeconds}s", style = MaterialTheme.typography.labelSmall) },
                     leadingIcon = { Icon(Icons.Default.FastForward, contentDescription = null, modifier = Modifier.size(14.dp)) },
                     modifier = Modifier.testTag("quick_skip_button")
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 FilterChip(
                     selected = sleepTimerRemainingSeconds != null,
                     onClick = onOpenSleepTimer,
                     label = {
                         val text = if (sleepTimerRemainingSeconds != null) {
                             val mins = sleepTimerRemainingSeconds / 60
-                            "Sleep: ${mins}m"
-                        } else "Sleep Timer"
+                            "${mins}m"
+                        } else "Sleep"
                         Text(text, style = MaterialTheme.typography.labelSmall)
                     },
                     leadingIcon = { Icon(Icons.Default.Bedtime, contentDescription = null, modifier = Modifier.size(14.dp)) },
@@ -635,85 +683,3 @@ fun PlayerModeScreen(
         }
     }
 }
-
-/**
- * Animated dynamic waveform art placeholder for Player Mode.
- */
-@Composable
-fun PlayerWaveformArtwork(
-    isPlaying: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "player_wave")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = if (isPlaying) (2 * Math.PI).toFloat() else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2000, easing = LinearEasing),
-            repeatMode = AnimRepeatMode.Restart
-        ),
-        label = "phase"
-    )
-
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
-
-    Box(
-        modifier = modifier
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        MaterialTheme.colorScheme.surfaceVariant
-                    )
-                )
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val barCount = 20
-            val barWidth = size.width / (barCount * 1.8f)
-            val spacing = barWidth * 0.8f
-            val startX = (size.width - (barCount * (barWidth + spacing))) / 2f
-            val centerY = size.height / 2f
-
-            for (i in 0 until barCount) {
-                val x = startX + i * (barWidth + spacing)
-                val waveFactor = if (isPlaying) {
-                    (sin(phase + i * 0.4) * 0.42 + 0.58).toFloat()
-                } else {
-                    0.25f
-                }
-                val barHeight = (size.height * 0.48f) * waveFactor
-                val topY = centerY - barHeight / 2f
-
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(primaryColor, secondaryColor),
-                        startY = topY,
-                        endY = topY + barHeight
-                    ),
-                    topLeft = Offset(x, topY),
-                    size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f, barWidth / 2f)
-                )
-            }
-        }
-
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-            modifier = Modifier.size(64.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.MusicNote,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(34.dp)
-                )
-            }
-        }
-    }
-}
-

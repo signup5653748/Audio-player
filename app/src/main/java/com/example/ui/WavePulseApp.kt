@@ -54,6 +54,7 @@ import com.example.ui.components.SkipSettingsDialog
 import com.example.ui.components.SleepTimerDialog
 import com.example.ui.components.SmartMusicTopBar
 import com.example.ui.components.SongDetailsDialog
+import com.example.ui.components.VisualEffectsDialog
 import com.example.ui.screens.AllTracksScreen
 import com.example.ui.screens.FoldersScreen
 import com.example.ui.screens.PlayerModeScreen
@@ -90,6 +91,9 @@ fun WavePulseApp(
     val showSleepDialog by viewModel.showSleepDialog.collectAsStateWithLifecycle()
     val showEqualizerDialog by viewModel.showEqualizerDialog.collectAsStateWithLifecycle()
     val showSongDetailsDialog by viewModel.showSongDetailsDialog.collectAsStateWithLifecycle()
+    val visualEffectsEnabled by viewModel.visualEffectsEnabled.collectAsStateWithLifecycle()
+    val selectedVisualEffect by viewModel.selectedVisualEffect.collectAsStateWithLifecycle()
+    val showVisualEffectsDialog by viewModel.showVisualEffectsDialog.collectAsStateWithLifecycle()
 
     // Keep Screen Awake (Wake Lock) via WindowManager flag
     DisposableEffect(playerState.isKeepScreenAwake, playerState.isPlaying) {
@@ -149,16 +153,19 @@ fun WavePulseApp(
                 fadeDurationSeconds = fadeDurationSeconds,
                 skipDurationSeconds = skipDurationSeconds,
                 sleepTimerRemainingSeconds = sleepTimerRemainingSeconds,
+                visualEffectsEnabled = visualEffectsEnabled,
+                selectedVisualEffect = selectedVisualEffect,
                 onBackToHome = { viewModel.exitPlayerMode() },
-                onTogglePlayPause = { viewModel.playerEngine.togglePlayPause() },
-                onSkipNext = { viewModel.playerEngine.skipNext() },
-                onSkipPrevious = { viewModel.playerEngine.skipPrevious() },
+                onTogglePlayPause = { viewModel.togglePlayPause() },
+                onSkipNext = { viewModel.skipNext() },
+                onSkipPrevious = { viewModel.skipPrevious() },
                 onSkipForward = { viewModel.skipForward() },
                 onSkipBackward = { viewModel.skipBackward() },
                 onSeekTo = { viewModel.playerEngine.seekTo(it) },
                 onToggleShuffle = { viewModel.playerEngine.toggleShuffle() },
                 onCycleRepeat = { viewModel.playerEngine.cycleRepeatMode() },
                 onToggleKeepScreenAwake = { viewModel.toggleKeepScreenAwake() },
+                onOpenVisualEffects = { viewModel.setShowVisualEffectsDialog(true) },
                 onOpenEqualizer = { viewModel.setShowEqualizerDialog(true) },
                 onOpenSongDetails = { viewModel.setShowSongDetailsDialog(true) },
                 onOpenFadeSettings = { viewModel.setShowFadeDialog(true) },
@@ -197,9 +204,9 @@ fun WavePulseApp(
                     ) {
                         MiniPlayer(
                             playerState = playerState,
-                            onTogglePlayPause = { viewModel.playerEngine.togglePlayPause() },
-                            onSkipNext = { viewModel.playerEngine.skipNext() },
-                            onSkipPrevious = { viewModel.playerEngine.skipPrevious() },
+                            onTogglePlayPause = { viewModel.togglePlayPause() },
+                            onSkipNext = { viewModel.skipNext() },
+                            onSkipPrevious = { viewModel.skipPrevious() },
                             onOpenExpandedPlayer = { viewModel.enterPlayerMode() }
                         )
                     }
@@ -335,6 +342,17 @@ fun WavePulseApp(
         SongDetailsDialog(
             track = playerState.currentTrack,
             onDismiss = { viewModel.setShowSongDetailsDialog(false) }
+        )
+    }
+
+    // Dialog: Visual Effects & Animations (20 variations)
+    if (showVisualEffectsDialog) {
+        VisualEffectsDialog(
+            visualEffectsEnabled = visualEffectsEnabled,
+            currentEffect = selectedVisualEffect,
+            onToggleEnabled = { viewModel.toggleVisualEffects(it) },
+            onSelectEffect = { viewModel.selectVisualEffect(it) },
+            onDismiss = { viewModel.setShowVisualEffectsDialog(false) }
         )
     }
 }

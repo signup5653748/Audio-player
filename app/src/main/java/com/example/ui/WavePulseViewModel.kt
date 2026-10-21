@@ -7,6 +7,7 @@ import com.example.data.MediaScanner
 import com.example.data.PreferencesManager
 import com.example.model.FolderItem
 import com.example.model.MediaItem
+import com.example.model.VisualEffectType
 import com.example.player.MediaPlayerEngine
 import com.example.player.PlayerState
 import kotlinx.coroutines.Job
@@ -66,6 +67,13 @@ class WavePulseViewModel(application: Application) : AndroidViewModel(applicatio
     private val _skipDurationSeconds = MutableStateFlow(preferencesManager.skipDurationSeconds)
     val skipDurationSeconds: StateFlow<Int> = _skipDurationSeconds.asStateFlow()
 
+    // Visual Effects & Animations state
+    private val _visualEffectsEnabled = MutableStateFlow(preferencesManager.visualEffectsEnabled)
+    val visualEffectsEnabled: StateFlow<Boolean> = _visualEffectsEnabled.asStateFlow()
+
+    private val _selectedVisualEffect = MutableStateFlow(VisualEffectType.fromId(preferencesManager.selectedVisualEffectId))
+    val selectedVisualEffect: StateFlow<VisualEffectType> = _selectedVisualEffect.asStateFlow()
+
     // Sleep Timer state
     private val _sleepTimerRemainingSeconds = MutableStateFlow<Int?>(null)
     val sleepTimerRemainingSeconds: StateFlow<Int?> = _sleepTimerRemainingSeconds.asStateFlow()
@@ -96,6 +104,9 @@ class WavePulseViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _showSleepDialog = MutableStateFlow(false)
     val showSleepDialog: StateFlow<Boolean> = _showSleepDialog.asStateFlow()
+
+    private val _showVisualEffectsDialog = MutableStateFlow(false)
+    val showVisualEffectsDialog: StateFlow<Boolean> = _showVisualEffectsDialog.asStateFlow()
 
     private val _showEqualizerDialog = MutableStateFlow(false)
     val showEqualizerDialog: StateFlow<Boolean> = _showEqualizerDialog.asStateFlow()
@@ -234,9 +245,6 @@ class WavePulseViewModel(application: Application) : AndroidViewModel(applicatio
         _selectedFolder.value = null
     }
 
-    /**
-     * Tapping any song instantly switches to focused Player Mode!
-     */
     fun playTrack(track: MediaItem) {
         val currentContext = if (_selectedFolder.value != null) {
             visibleMediaList.value.filter { it.folderPath == _selectedFolder.value!!.path }
@@ -266,6 +274,12 @@ class WavePulseViewModel(application: Application) : AndroidViewModel(applicatio
         _isPlayerModeActive.value = false
     }
 
+    fun togglePlayPause() {
+        playerEngine.togglePlayPause()
+        val isNowPlaying = playerEngine.playerState.value.isPlaying
+        announceAccessibility(if (isNowPlaying) "Playing" else "Paused")
+    }
+
     fun skipForward() {
         playerEngine.skipForward(_skipDurationSeconds.value)
         announceAccessibility("Skipped forward ${_skipDurationSeconds.value} seconds")
@@ -274,6 +288,41 @@ class WavePulseViewModel(application: Application) : AndroidViewModel(applicatio
     fun skipBackward() {
         playerEngine.skipBackward(_skipDurationSeconds.value)
         announceAccessibility("Skipped backward ${_skipDurationSeconds.value} seconds")
+    }
+
+    fun skipNext() {
+        playerEngine.skipNext()
+        val currentTrack = playerEngine.playerState.value.currentTrack
+        if (currentTrack != null) {
+            announceAccessibility("Now playing: ${currentTrack.title}")
+        }
+    }
+
+    fun skipPrevious() {
+        playerEngine.skipPrevious()
+        val currentTrack = playerEngine.playerState.value.currentTrack
+        if (currentTrack != null) {
+            announceAccessibility("Now playing: ${currentTrack.title}")
+        }
+    }
+
+    // --- Visual Effects & Animations ---
+
+    fun toggleVisualEffects(enabled: Boolean) {
+        _visualEffectsEnabled.value = enabled
+        preferencesManager.visualEffectsEnabled = enabled
+        val msg = if (enabled) "Visual effects and animations enabled" else "Visual effects turned off"
+        announceAccessibility(msg)
+    }
+
+    fun selectVisualEffect(effect: VisualEffectType) {
+        _selectedVisualEffect.value = effect
+        preferencesManager.selectedVisualEffectId = effect.id
+        announceAccessibility("Applied visual effect: ${effect.title}")
+    }
+
+    fun setShowVisualEffectsDialog(show: Boolean) {
+        _showVisualEffectsDialog.value = show
     }
 
     // --- Sleep Timer ---
