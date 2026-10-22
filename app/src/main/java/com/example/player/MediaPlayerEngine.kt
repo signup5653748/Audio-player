@@ -22,20 +22,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 
 /**
- * Robust, production-grade audio playback engine:
- * - Thread-safe, synchronized playback state machine
- * - Deterministic, instant Play/Pause toggle with zero latency or state mismatch
- * - Universal, smooth fade-in and fade-out audio transitions
- * - Seamless Next / Previous track switching with FileDescriptor data source loading
- * - Automatic error recovery so playback never halts or leaves the player dead
- * - Equalizer, Bass Boost, 3D Virtualizer, and Sleep Timer integration
+ * Robust, production-grade audio playback engine with Universal Fade transitions:
+ * - Deterministic Main-thread MediaPlayer state transitions
+ * - Universal, smooth automatic Fade-in and Fade-out on Play, Pause, Next, Previous, and Skip
+ * - Reusable AudioFocus listener preventing focus-loss self-pause loops
+ * - Dynamic customizable fade duration configurable via settings
+ * - Equalizer, Bass Boost, Virtualizer, and Sleep Timer integration
  */
 class MediaPlayerEngine(
     private val context: Context,
@@ -49,6 +46,7 @@ class MediaPlayerEngine(
     private var mediaPlayer: MediaPlayer? = null
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
+    private var hasAudioFocus = false
 
     // Audio effects
     private var equalizer: Equalizer? = null
@@ -61,14 +59,31 @@ class MediaPlayerEngine(
     private var playlist: List<MediaItem> = emptyList()
     private var currentIndex: Int = -1
 
-    // Concurrency guards and explicit intent tracking
-    private val stateMutex = Mutex()
-    private var fadeJob: Job? = null
+    @Volatile
+    private var isUserPlayIntent: Boolean = false
     private var progressJob: Job? = null
-    @Volatile private var currentVolume: Float = 1.0f
-    @Volatile private var isUserPlayIntent: Boolean = false
+    private var fadeJob: Job? = null
 
     var onTrackChangedListener: ((MediaItem) -> Unit)? = null
+
+    // Single persistent audio focus change listener to prevent focus-theft self-pausing
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                hasAudioFocus = false
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                setVolume(0.2f)
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                setVolume(1.0f)
+            }
+        }
+    }
 
     init {
         _playerState.update {
@@ -105,8 +120,8 @@ class MediaPlayerEngine(
     }
 
     /**
-     * Universal track switch:
-     * Prepares new track, and plays smoothly.
+     * Prepares and starts playback of the selected track with smooth universal fade-in.
+     * When switching between tracks (Next/Prev), performs a rapid fade-out on the existing player.
      */
     fun playTrack(track: MediaItem, updatePlaylistContext: List<MediaItem>? = null) {
         if (updatePlaylistContext != null) {
@@ -118,8 +133,9 @@ class MediaPlayerEngine(
         }
 
         isUserPlayIntent = true
+        fadeJob?.cancel()
+        fadeJob = null
 
-        // Immediately update player state with track info and playing state for instantaneous UI response
         _playerState.update {
             it.copy(
                 currentTrack = track,
@@ -127,56 +143,60 @@ class MediaPlayerEngine(
                 currentPositionMs = 0L,
                 isPlaying = true,
                 isBuffering = true,
+                isFadingIn = false,
                 isFadingOut = false
             )
         }
 
-        scope.launch {
-            stateMutex.withLock {
-                fadeJob?.cancel()
-                fadeJob = null
+        scope.launch(Dispatchers.Main) {
+            val existingPlayer = mediaPlayer
+            val isCurrentlyPlaying = try { existingPlayer?.isPlaying == true } catch (e: Exception) { false }
+            val fadeEnabled = preferencesManager.fadeEffectsEnabled
 
-                // Perform quick fade out of existing audio if playing
-                val isCurrentlyPlaying = try { mediaPlayer?.isPlaying == true } catch (e: Exception) { false }
-                if (isCurrentlyPlaying && preferencesManager.fadeEffectsEnabled) {
-                    performFadeImmediate(from = currentVolume, to = 0f, durationMs = 100)
+            // Smoothly dip out the current track before switching if already playing
+            if (isCurrentlyPlaying && existingPlayer != null && fadeEnabled) {
+                val fadeOutDuration = 100
+                val steps = 4
+                val stepDelay = (fadeOutDuration / steps).toLong()
+                for (i in steps downTo 0) {
+                    val vol = i.toFloat() / steps.toFloat()
+                    try { existingPlayer.setVolume(vol, vol) } catch (e: Exception) {}
+                    delay(stepDelay)
                 }
-
-                prepareAndStart(track)
             }
+
+            prepareAndStart(track)
         }
     }
 
-    private suspend fun prepareAndStart(track: MediaItem) {
-        withContext(Dispatchers.Main) {
+    private fun prepareAndStart(track: MediaItem) {
+        try {
+            stopProgressTracker()
+            releaseEffects()
+
             try {
-                fadeJob?.cancel()
-                fadeJob = null
-                progressJob?.cancel()
-                releaseEffects()
+                mediaPlayer?.reset()
+                mediaPlayer?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error resetting previous MediaPlayer", e)
+            }
+            mediaPlayer = null
 
-                try {
-                    mediaPlayer?.release()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error releasing old mediaPlayer", e)
-                }
-                mediaPlayer = null
+            requestAudioFocus()
 
-                requestAudioFocus()
+            val player = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
 
-                val player = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .build()
-                    )
+                setPlayerDataSource(this, track)
 
-                    // Safe data source loading via FileDescriptor when applicable
-                    setPlayerDataSource(this, track)
-
-                    setOnPreparedListener { mp ->
-                        val duration = mp.duration.toLong().coerceAtLeast(track.durationMs)
+                setOnPreparedListener { mp ->
+                    try {
+                        val duration = mp.duration.toLong().let { if (it > 0) it else track.durationMs }
                         _playerState.update {
                             it.copy(
                                 currentTrack = track,
@@ -188,88 +208,71 @@ class MediaPlayerEngine(
 
                         setupAudioEffects(mp.audioSessionId)
 
-                        // If user paused while preparing, don't start audio
                         if (!isUserPlayIntent) {
                             return@setOnPreparedListener
                         }
 
-                        // Start playback with universal fade if configured
-                        try {
-                            val fadeDuration = preferencesManager.fadeDurationMs
-                            if (preferencesManager.fadeEffectsEnabled && fadeDuration > 100) {
-                                setPlayerVolume(0f)
-                                mp.start()
-                                startFade(from = 0f, to = 1f, durationMs = fadeDuration.coerceIn(150, 400)) {
-                                    _playerState.update { it.copy(isFadingIn = false) }
-                                }
-                            } else {
-                                setPlayerVolume(1f)
-                                mp.start()
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error starting MediaPlayer onPrepared", e)
-                        }
+                        val fadeEnabled = preferencesManager.fadeEffectsEnabled
+                        val fadeDuration = (preferencesManager.fadeDurationSeconds * 1000).toInt().coerceIn(150, 1000)
 
-                        startProgressTracker()
+                        if (fadeEnabled) {
+                            setVolume(0.0f)
+                            mp.start()
+                            startProgressTracker()
+                            startFadeIn(fadeDuration)
+                        } else {
+                            setVolume(1.0f)
+                            mp.start()
+                            startProgressTracker()
+                        }
                         onTrackChangedListener?.invoke(track)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in onPrepared callback", e)
                     }
-
-                    setOnCompletionListener {
-                        handleTrackCompletion()
-                    }
-
-                    setOnErrorListener { mp, what, extra ->
-                        Log.e(TAG, "MediaPlayer error: what=$what, extra=$extra")
-                        try {
-                            mp.reset()
-                            mp.release()
-                        } catch (e: Exception) {
-                            // ignore
-                        }
-                        if (mediaPlayer == mp) {
-                            mediaPlayer = null
-                        }
-                        _playerState.update {
-                            it.copy(
-                                isPlaying = false,
-                                isBuffering = false,
-                                isFadingIn = false,
-                                isFadingOut = false
-                            )
-                        }
-
-                        // Auto-skip to next track if available so playback never dead-ends
-                        scope.launch {
-                            delay(300)
-                            if (playlist.size > 1 && isUserPlayIntent) {
-                                skipNext()
-                            }
-                        }
-                        true
-                    }
-
-                    prepareAsync()
                 }
 
-                _playerState.update {
-                    it.copy(
-                        currentTrack = track,
-                        isBuffering = true
-                    )
+                setOnCompletionListener {
+                    handleTrackCompletion()
                 }
-                mediaPlayer = player
 
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in prepareAndStart: ${track.title}", e)
-                _playerState.update { it.copy(isPlaying = false, isBuffering = false) }
+                setOnErrorListener { mp, what, extra ->
+                    Log.e(TAG, "MediaPlayer error: what=$what, extra=$extra")
+                    try {
+                        mp.reset()
+                        mp.release()
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                    if (mediaPlayer == mp) {
+                        mediaPlayer = null
+                    }
+                    _playerState.update {
+                        it.copy(
+                            isPlaying = false,
+                            isBuffering = false,
+                            isFadingIn = false,
+                            isFadingOut = false
+                        )
+                    }
+                    true
+                }
+
+                prepareAsync()
             }
+
+            mediaPlayer = player
+            _playerState.update {
+                it.copy(
+                    currentTrack = track,
+                    isBuffering = true
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up MediaPlayer: ${track.title}", e)
+            _playerState.update { it.copy(isPlaying = false, isBuffering = false) }
         }
     }
 
-    /**
-     * Sets the media source robustly via FileDescriptor if available,
-     * which avoids Android media extractor file extension and permission issues.
-     */
     private fun setPlayerDataSource(player: MediaPlayer, track: MediaItem) {
         if (track.uri.scheme == "file") {
             val file = File(track.uri.path ?: "")
@@ -294,106 +297,93 @@ class MediaPlayerEngine(
     }
 
     /**
-     * Resumes playback with instant UI response and smooth, synchronized fade-in.
-     * Recovers automatically if the player was paused, released, or at end-of-track.
+     * Resumes playback with smooth universal fade-in.
      */
     fun resume() {
         isUserPlayIntent = true
-        // 1. Instantly update UI state so button and badges reflect PLAY with zero lag
+        fadeJob?.cancel()
+        fadeJob = null
         _playerState.update { it.copy(isPlaying = true, isFadingOut = false) }
 
-        scope.launch {
-            stateMutex.withLock {
-                fadeJob?.cancel()
-                fadeJob = null
+        scope.launch(Dispatchers.Main) {
+            val track = _playerState.value.currentTrack ?: playlist.getOrNull(currentIndex)
+            if (track == null) {
+                _playerState.update { it.copy(isPlaying = false) }
+                return@launch
+            }
 
-                val track = _playerState.value.currentTrack ?: playlist.getOrNull(currentIndex)
-                if (track == null) {
-                    _playerState.update { it.copy(isPlaying = false) }
-                    return@withLock
-                }
+            val player = mediaPlayer
+            if (player == null) {
+                prepareAndStart(track)
+                return@launch
+            }
 
-                val player = mediaPlayer
-                var needRecreate = player == null
-
-                if (player != null) {
-                    try {
-                        val pos = player.currentPosition
-                        val dur = player.duration
-                        // If track was at completion (end of file), rewind to start
-                        if (pos < 0 || (dur > 0 && pos >= dur - 200)) {
-                            player.seekTo(0)
-                        }
-                    } catch (e: Exception) {
-                        needRecreate = true
-                    }
-                }
-
-                if (needRecreate) {
-                    prepareAndStart(track)
-                    return@withLock
+            try {
+                // If track completed or is at end, seek back to beginning
+                val currentPos = player.currentPosition
+                val duration = player.duration
+                if (duration > 0 && currentPos >= duration - 300) {
+                    player.seekTo(0)
                 }
 
                 requestAudioFocus()
-                try {
-                    player!!.start()
-                    startProgressTracker()
+                val fadeEnabled = preferencesManager.fadeEffectsEnabled
+                val fadeDuration = (preferencesManager.fadeDurationSeconds * 1000).toInt().coerceIn(150, 1000)
 
-                    val fadeDuration = preferencesManager.fadeDurationMs
-                    if (preferencesManager.fadeEffectsEnabled && fadeDuration > 100) {
-                        _playerState.update { it.copy(isFadingIn = true) }
-                        startFade(from = currentVolume.coerceAtMost(0.2f), to = 1f, durationMs = fadeDuration.coerceIn(150, 400)) {
-                            _playerState.update { it.copy(isFadingIn = false) }
-                        }
-                    } else {
-                        setPlayerVolume(1f)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error resuming player, re-preparing track", e)
-                    prepareAndStart(track)
+                if (fadeEnabled) {
+                    setVolume(0.0f)
+                    player.start()
+                    _playerState.update { it.copy(isPlaying = true, isBuffering = false) }
+                    startProgressTracker()
+                    startFadeIn(fadeDuration)
+                } else {
+                    setVolume(1.0f)
+                    player.start()
+                    _playerState.update { it.copy(isPlaying = true, isBuffering = false) }
+                    startProgressTracker()
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming player, re-preparing track", e)
+                prepareAndStart(track)
             }
         }
     }
 
     /**
-     * Pauses playback with instant UI response.
-     * Synchronizes state safely without race conditions or playback freezing.
+     * Pauses playback with smooth universal fade-out.
      */
     fun pause() {
         isUserPlayIntent = false
-        // 1. Instantly update UI state so button and badges reflect PAUSE with zero lag
-        _playerState.update { it.copy(isPlaying = false, isFadingIn = false) }
+        fadeJob?.cancel()
+        fadeJob = null
 
-        scope.launch {
-            stateMutex.withLock {
-                fadeJob?.cancel()
-                fadeJob = null
+        val player = mediaPlayer
+        val isCurrentlyPlaying = try { player?.isPlaying == true } catch (e: Exception) { false }
+        val fadeEnabled = preferencesManager.fadeEffectsEnabled
+        val fadeDuration = (preferencesManager.fadeDurationSeconds * 1000).toInt().coerceIn(100, 400)
 
-                val player = mediaPlayer ?: return@withLock
-
-                val fadeDuration = preferencesManager.fadeDurationMs
-                if (preferencesManager.fadeEffectsEnabled && fadeDuration > 100) {
-                    _playerState.update { it.copy(isFadingOut = true) }
-                    startFade(from = currentVolume, to = 0f, durationMs = fadeDuration.coerceIn(100, 250)) {
-                        try {
-                            if (!isUserPlayIntent) {
-                                player.pause()
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error pausing player after fade", e)
-                        }
-                        _playerState.update { it.copy(isFadingOut = false) }
-                    }
-                } else {
-                    try {
+        if (fadeEnabled && isCurrentlyPlaying && player != null) {
+            startFadeOut(fadeDuration) {
+                try {
+                    if (!isUserPlayIntent) {
                         player.pause()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error pausing player", e)
                     }
-                    setPlayerVolume(0f)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error pausing MediaPlayer after fade", e)
                 }
+                _playerState.update { it.copy(isPlaying = false, isFadingOut = false) }
+                stopProgressTracker()
             }
+        } else {
+            _playerState.update { it.copy(isPlaying = false, isFadingIn = false, isFadingOut = false) }
+            try {
+                if (isCurrentlyPlaying) {
+                    player?.pause()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error pausing MediaPlayer", e)
+            }
+            stopProgressTracker()
         }
     }
 
@@ -402,7 +392,8 @@ class MediaPlayerEngine(
      * Instant, deterministic, and always synchronizes UI and audio state.
      */
     fun togglePlayPause() {
-        if (_playerState.value.isPlaying) {
+        val isCurrentlyPlaying = try { mediaPlayer?.isPlaying == true } catch (e: Exception) { false }
+        if (isCurrentlyPlaying || _playerState.value.isPlaying) {
             pause()
         } else {
             resume()
@@ -410,7 +401,7 @@ class MediaPlayerEngine(
     }
 
     /**
-     * Dedicated Skip Forward (+X seconds).
+     * Dedicated Skip Forward (+X seconds) with micro-fade to eliminate pop/click.
      */
     fun skipForward(seconds: Int) {
         val player = mediaPlayer ?: return
@@ -418,28 +409,48 @@ class MediaPlayerEngine(
             val current = player.currentPosition.toLong()
             val duration = _playerState.value.durationMs
             val target = (current + seconds * 1000L).coerceIn(0L, duration)
-            seekTo(target)
+            if (preferencesManager.fadeEffectsEnabled && player.isPlaying) {
+                performSkipWithMicroFade(player, target)
+            } else {
+                seekTo(target)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error skipping forward", e)
         }
     }
 
     /**
-     * Dedicated Skip Backward (-X seconds).
+     * Dedicated Skip Backward (-X seconds) with micro-fade to eliminate pop/click.
      */
     fun skipBackward(seconds: Int) {
         val player = mediaPlayer ?: return
         try {
             val current = player.currentPosition.toLong()
             val target = (current - seconds * 1000L).coerceAtLeast(0L)
-            seekTo(target)
+            if (preferencesManager.fadeEffectsEnabled && player.isPlaying) {
+                performSkipWithMicroFade(player, target)
+            } else {
+                seekTo(target)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error skipping backward", e)
         }
     }
 
+    private fun performSkipWithMicroFade(player: MediaPlayer, targetPositionMs: Long) {
+        scope.launch(Dispatchers.Main) {
+            try { player.setVolume(0.3f, 0.3f) } catch (e: Exception) {}
+            delay(35)
+            player.seekTo(targetPositionMs.toInt())
+            _playerState.update { it.copy(currentPositionMs = targetPositionMs) }
+            delay(25)
+            val restoreDuration = (preferencesManager.fadeDurationSeconds * 300).toInt().coerceIn(100, 300)
+            startFadeIn(restoreDuration)
+        }
+    }
+
     /**
-     * Universal Next Track with smooth transition.
+     * Universal Next track transition with fade.
      */
     fun skipNext() {
         if (playlist.isEmpty()) {
@@ -450,7 +461,6 @@ class MediaPlayerEngine(
             return
         }
 
-        // Align current index with player state if needed
         val curTrack = _playerState.value.currentTrack
         if (curTrack != null) {
             val foundIdx = playlist.indexOfFirst { it.id == curTrack.id }
@@ -474,7 +484,7 @@ class MediaPlayerEngine(
     }
 
     /**
-     * Universal Previous Track with smooth transition.
+     * Universal Previous track transition with fade.
      */
     fun skipPrevious() {
         val player = mediaPlayer
@@ -538,69 +548,79 @@ class MediaPlayerEngine(
     }
 
     /**
-     * Smoothly fades out audio and stops playback (used by Sleep Timer).
+     * Stops playback cleanly with fade-out (used by Sleep Timer).
      */
     fun smoothFadeAndStop(onStopped: (() -> Unit)? = null) {
         isUserPlayIntent = false
-        _playerState.update { it.copy(isPlaying = false) }
-        scope.launch {
-            stateMutex.withLock {
-                fadeJob?.cancel()
-                fadeJob = null
-                val player = mediaPlayer ?: return@withLock
-                val fadeDuration = preferencesManager.fadeDurationMs.coerceIn(400, 1000)
-                _playerState.update { it.copy(isFadingOut = true) }
-                performFadeImmediate(from = currentVolume, to = 0f, durationMs = fadeDuration)
+        fadeJob?.cancel()
+        fadeJob = null
+
+        val player = mediaPlayer
+        val isCurrentlyPlaying = try { player?.isPlaying == true } catch (e: Exception) { false }
+        val fadeDuration = (preferencesManager.fadeDurationSeconds * 1000).toInt().coerceIn(600, 1500)
+
+        if (isCurrentlyPlaying && player != null) {
+            startFadeOut(fadeDuration) {
                 try {
                     player.pause()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping player on sleep timer", e)
+                    Log.w(TAG, "Error pausing on sleep timer", e)
                 }
-                _playerState.update { it.copy(isFadingOut = false) }
+                _playerState.update { it.copy(isPlaying = false, isFadingOut = false) }
+                stopProgressTracker()
                 onStopped?.invoke()
             }
+        } else {
+            pause()
+            onStopped?.invoke()
         }
     }
 
-    private fun startFade(from: Float, to: Float, durationMs: Int, onComplete: (() -> Unit)? = null) {
+    private fun startFadeIn(durationMs: Int, onComplete: (() -> Unit)? = null) {
         fadeJob?.cancel()
-        fadeJob = scope.launch {
-            val steps = (durationMs / 25).coerceIn(4, 20)
+        _playerState.update { it.copy(isFadingIn = true, isFadingOut = false) }
+        fadeJob = scope.launch(Dispatchers.Main) {
+            val steps = (durationMs / 25).coerceIn(4, 25)
             val stepInterval = (durationMs / steps).toLong().coerceAtLeast(10L)
-
             for (i in 0..steps) {
                 if (!isActive) break
-                val fraction = i.toFloat() / steps.toFloat()
-                val vol = (from + (to - from) * fraction).coerceIn(0f, 1f)
-                setPlayerVolume(vol)
+                val vol = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+                setVolume(vol)
                 delay(stepInterval)
             }
             if (isActive) {
-                setPlayerVolume(to)
+                setVolume(1.0f)
+                _playerState.update { it.copy(isFadingIn = false) }
                 onComplete?.invoke()
             }
         }
     }
 
-    private suspend fun performFadeImmediate(from: Float, to: Float, durationMs: Int) {
-        val steps = (durationMs / 25).coerceIn(4, 20)
-        val stepInterval = (durationMs / steps).toLong().coerceAtLeast(10L)
-
-        for (i in 0..steps) {
-            val fraction = i.toFloat() / steps.toFloat()
-            val vol = (from + (to - from) * fraction).coerceIn(0f, 1f)
-            setPlayerVolume(vol)
-            delay(stepInterval)
+    private fun startFadeOut(durationMs: Int, onComplete: (() -> Unit)? = null) {
+        fadeJob?.cancel()
+        _playerState.update { it.copy(isFadingOut = true, isFadingIn = false) }
+        fadeJob = scope.launch(Dispatchers.Main) {
+            val steps = (durationMs / 25).coerceIn(4, 25)
+            val stepInterval = (durationMs / steps).toLong().coerceAtLeast(10L)
+            for (i in steps downTo 0) {
+                if (!isActive) break
+                val vol = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+                setVolume(vol)
+                delay(stepInterval)
+            }
+            if (isActive) {
+                setVolume(0.0f)
+                _playerState.update { it.copy(isFadingOut = false) }
+                onComplete?.invoke()
+            }
         }
-        setPlayerVolume(to)
     }
 
-    private fun setPlayerVolume(volume: Float) {
-        currentVolume = volume
+    private fun setVolume(volume: Float) {
         try {
             mediaPlayer?.setVolume(volume, volume)
         } catch (e: Exception) {
-            // Ignore if player is released
+            // ignore
         }
     }
 
@@ -623,25 +643,27 @@ class MediaPlayerEngine(
                         // ignore
                     }
                     _playerState.update { it.copy(isPlaying = false, currentPositionMs = 0L) }
+                    stopProgressTracker()
                 }
             }
         }
     }
 
     private fun startProgressTracker() {
-        progressJob?.cancel()
-        progressJob = scope.launch {
+        stopProgressTracker()
+        progressJob = scope.launch(Dispatchers.Main) {
             while (isActive) {
                 val player = mediaPlayer
                 val isPlaying = try { player?.isPlaying == true } catch (e: Exception) { false }
                 if (player != null && isPlaying) {
                     try {
                         val pos = player.currentPosition.toLong()
-                        val dur = player.duration.toLong().coerceAtLeast(_playerState.value.durationMs)
+                        val dur = player.duration.toLong().let { if (it > 0) it else _playerState.value.durationMs }
                         _playerState.update {
                             it.copy(
                                 currentPositionMs = pos,
-                                durationMs = dur
+                                durationMs = dur,
+                                isPlaying = true
                             )
                         }
                     } catch (e: Exception) {
@@ -651,6 +673,11 @@ class MediaPlayerEngine(
                 delay(250)
             }
         }
+    }
+
+    private fun stopProgressTracker() {
+        progressJob?.cancel()
+        progressJob = null
     }
 
     private fun setupAudioEffects(sessionId: Int) {
@@ -676,7 +703,7 @@ class MediaPlayerEngine(
                     setStrength(preferencesManager.virtualizerLevel.toShort())
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "Audio effects not supported on this device/session", e)
         }
     }
@@ -722,55 +749,57 @@ class MediaPlayerEngine(
         }
     }
 
-    private fun requestAudioFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setOnAudioFocusChangeListener { focusChange ->
-                    when (focusChange) {
-                        AudioManager.AUDIOFOCUS_LOSS -> pause()
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pause()
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                            setPlayerVolume(0.2f)
-                        }
-                        AudioManager.AUDIOFOCUS_GAIN -> {
-                            setPlayerVolume(1.0f)
-                        }
-                    }
-                }
-                .build()
-            audioFocusRequest = request
-            audioManager.requestAudioFocus(request)
+    private fun requestAudioFocus(): Boolean {
+        if (hasAudioFocus) return true
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest == null) {
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build()
+            }
+            audioManager.requestAudioFocus(audioFocusRequest!!)
         } else {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
-                { focusChange ->
-                    if (focusChange == AudioManager.AUDIOFOCUS_LOSS) pause()
-                },
+                audioFocusChangeListener,
                 AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN
             )
         }
+        hasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        return hasAudioFocus
+    }
+
+    private fun abandonAudioFocus() {
+        if (!hasAudioFocus) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(audioFocusChangeListener)
+        }
+        hasAudioFocus = false
     }
 
     fun release() {
         isUserPlayIntent = false
         fadeJob?.cancel()
-        progressJob?.cancel()
+        fadeJob = null
+        stopProgressTracker()
         releaseEffects()
         try {
+            mediaPlayer?.reset()
             mediaPlayer?.release()
         } catch (e: Exception) {
             // ignore
         }
         mediaPlayer = null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && audioFocusRequest != null) {
-            audioManager.abandonAudioFocusRequest(audioFocusRequest!!)
-        }
+        abandonAudioFocus()
     }
 }

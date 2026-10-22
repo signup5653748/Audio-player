@@ -363,12 +363,13 @@ class MediaScanner(private val context: Context) {
         id: Long,
         isVideo: Boolean
     ): MediaItem {
-        if (!file.exists() || file.length() == 0L) {
+        val sampleRate = 22050
+        val actualSeconds = durationSeconds.coerceIn(4, 45)
+        val numSamples = sampleRate * actualSeconds
+        val expectedLength = (numSamples * 2 + 44).toLong()
+
+        if (!file.exists() || file.length() != expectedLength) {
             try {
-                // Generate up to 30s of PCM wav audio with harmonic synthesis
-                val sampleRate = 22050
-                val actualSeconds = durationSeconds.coerceIn(4, 30)
-                val numSamples = sampleRate * actualSeconds
                 val buffer = ByteArray(numSamples * 2)
 
                 for (i in 0 until numSamples) {
@@ -398,7 +399,7 @@ class MediaScanner(private val context: Context) {
             title = title,
             artist = artist,
             album = album,
-            durationMs = durationSeconds * 1000L,
+            durationMs = actualSeconds * 1000L,
             uri = Uri.fromFile(file),
             mimeType = if (isVideo) "video/mp4" else "audio/wav",
             isVideo = isVideo,
